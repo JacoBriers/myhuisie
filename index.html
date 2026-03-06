@@ -117,6 +117,11 @@
     .btn-danger:hover { background: var(--danger-light); border-color: var(--danger); }
 
     /* ── Main layout ── */
+    #topSection {
+      max-width: 740px;
+      margin: 0 auto 14px;
+    }
+
     main {
       max-width: 740px;
       margin: 0 auto;
@@ -479,6 +484,7 @@
   </div>
 </header>
 
+<div id="topSection"></div>
 <main id="roomList"></main>
 
 <div class="bottom-bar">
@@ -748,10 +754,10 @@ function stopAllTimers() {
 // Render
 // ============================================================
 function render() {
-  const list = document.getElementById('roomList');
-  list.innerHTML = '';
+  // ── Top-level tasks card (separate container, not inside #roomList) ──
+  const topSection = document.getElementById('topSection');
+  topSection.innerHTML = '';
 
-  // ── Top-level tasks card ──
   const topDone = state.topTasks.filter(t => t.done).length;
   const topTotal = state.topTasks.length;
   const topAllDone = topTotal > 0 && topDone === topTotal;
@@ -773,9 +779,9 @@ function render() {
       <input type="text" id="new-top-task" placeholder="Add a task…" maxlength="60" />
       <button class="btn-primary" id="addTopTaskBtn">Add</button>
     </div>`;
-  list.appendChild(topCard);
+  topSection.appendChild(topCard);
 
-  // Bind top-task events
+  // Bind each top task individually (isolated from bindEvents which covers #roomList)
   for (const task of state.topTasks) {
     const li = document.getElementById(`task-${task.id}`);
     if (li) bindTask(li, task, 'top');
@@ -783,6 +789,9 @@ function render() {
   bindAddTopTask();
 
   // ── Room cards ──
+  const list = document.getElementById('roomList');
+  list.innerHTML = '';
+
   for (const room of state.rooms) {
     const done = room.tasks.filter(t => t.done).length;
     const total = room.tasks.length;
