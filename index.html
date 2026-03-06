@@ -386,6 +386,30 @@
       justify-content: flex-end;
     }
 
+    /* ── Top-level tasks ── */
+    .top-tasks-card {
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-card);
+      overflow: hidden;
+    }
+
+    .top-tasks-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      gap: 10px;
+      background: linear-gradient(135deg, #FFF5E0 0%, #FDE8C0 100%);
+      border-bottom: 1.5px solid var(--border);
+    }
+
+    .top-tasks-title {
+      font-size: 1.1rem;
+      font-weight: 800;
+    }
+
     /* Tick ripple */
     @keyframes ripple {
       0%   { transform: scale(0); opacity: 0.5; }
@@ -554,40 +578,44 @@ const FACTORY = [
 ];
 
 // ============================================================
-// State  (rooms[] stored in localStorage as JSON)
+// State
 // ============================================================
-// Internal runtime shape per room:
-//   { id, name, open, tasks: [{ id, name, minutes, done, timerRunning, timerSeconds }] }
+// Runtime shape:
+//   { topTasks: [...], rooms: [{ id, name, open, tasks: [...] }] }
+// Each task: { id, name, minutes, done, timerRunning, timerSeconds }
 //
-// The "setup" (shareable) shape is the FACTORY format above:
-//   [{ room, tasks: [{ name, minutes }] }]
+// Shareable "setup" shape:
+//   { topTasks: [{ name, minutes }], rooms: [{ room, tasks: [{ name, minutes }] }] }
 
 let _uid = 1;
 function uid() { return _uid++; }
 
+function makeTask(t) {
+  const mins = t.minutes || 10;
+  return { id: uid(), name: t.name, minutes: mins, done: false, timerRunning: false, timerSeconds: mins * 60 };
+}
+
 function setupToState(setup) {
   _uid = 1;
-  const rooms = setup.map((r, ri) => {
-    const roomId = uid();
-    return {
-      id: roomId,
-      name: r.room,
-      open: ri === 0,
-      tasks: r.tasks.map(t => {
-        const mins = t.minutes || 10;
-        return { id: uid(), name: t.name, minutes: mins, done: false, timerRunning: false, timerSeconds: mins * 60 };
-      })
-    };
-  });
-  return { rooms };
+  const topTasks = (setup.topTasks || []).map(makeTask);
+  const rooms = (setup.rooms || FACTORY).map((r, ri) => ({
+    id: uid(),
+    name: r.room,
+    open: ri === 0,
+    tasks: r.tasks.map(makeTask)
+  }));
+  return { topTasks, rooms };
 }
 
 // Extract shareable setup JSON from current state
 function stateToSetup(st) {
-  return st.rooms.map(r => ({
-    room: r.name,
-    tasks: r.tasks.map(t => ({ name: t.name, minutes: t.minutes }))
-  }));
+  return {
+    topTasks: st.topTasks.map(t => ({ name: t.name, minutes: t.minutes })),
+    rooms: st.rooms.map(r => ({
+      room: r.name,
+      tasks: r.tasks.map(t => ({ name: t.name, minutes: t.minutes }))
+    }))
+  };
 }
 
 function loadState() {
@@ -595,8 +623,11 @@ function loadState() {
     const raw = localStorage.getItem('huisie');
     if (raw) {
       const parsed = JSON.parse(raw);
+      // Backward-compat: old saves had no topTasks
+      if (!parsed.topTasks) parsed.topTasks = [];
       // Restore _uid above existing max id to avoid collisions
       let max = 0;
+      parsed.topTasks.forEach(t => { if (t.id > max) max = t.id; });
       parsed.rooms.forEach(r => {
         if (r.id > max) max = r.id;
         r.tasks.forEach(t => { if (t.id > max) max = t.id; });
@@ -605,7 +636,7 @@ function loadState() {
       return parsed;
     }
   } catch (e) {}
-  return setupToState(FACTORY);
+  return setupToState({ topTasks: [], rooms: FACTORY });
 }
 
 function saveState() {
@@ -655,6 +686,8 @@ function playBeep() {
 const timers = {}; // taskId -> intervalId
 
 function findTask(id) {
+  const top = state.topTasks.find(t => t.id === id);
+  if (top) return top;
   for (const r of state.rooms) { const t = r.tasks.find(t => t.id === id); if (t) return t; }
   return null;
 }
@@ -718,6 +751,38 @@ function render() {
   const list = document.getElementById('roomList');
   list.innerHTML = '';
 
+  // ── Top-level tasks card ──
+  const topDone = state.topTasks.filter(t => t.done).length;
+  const topTotal = state.topTasks.length;
+  const topAllDone = topTotal > 0 && topDone === topTotal;
+
+  const topCard = document.createElement('div');
+  topCard.className = 'top-tasks-card';
+  topCard.id = 'topTasksCard';
+  topCard.innerHTML = `
+    <div class="top-tasks-header">
+      <span class="top-tasks-title">📋 Tasks</span>
+      <span class="room-progress${topAllDone ? ' all-done' : ''}" id="topTasksProgress">
+        ${topTotal > 0 ? `${topDone}/${topTotal}` : ''}
+      </span>
+    </div>
+    <ul class="task-list" id="topTasksList">
+      ${state.topTasks.map(taskHTML).join('')}
+    </ul>
+    <div class="add-task-row">
+      <input type="text" id="new-top-task" placeholder="Add a task…" maxlength="60" />
+      <button class="btn-primary" id="addTopTaskBtn">Add</button>
+    </div>`;
+  list.appendChild(topCard);
+
+  // Bind top-task events
+  for (const task of state.topTasks) {
+    const li = document.getElementById(`task-${task.id}`);
+    if (li) bindTask(li, task, 'top');
+  }
+  bindAddTopTask();
+
+  // ── Room cards ──
   for (const room of state.rooms) {
     const done = room.tasks.filter(t => t.done).length;
     const total = room.tasks.length;
@@ -758,11 +823,10 @@ function render() {
 
   bindEvents();
 
-  for (const room of state.rooms) {
-    for (const task of room.tasks) {
-      if (task.timerRunning && task.timerSeconds > 0) startTimer(task.id);
-      else { refreshTimerEl(task.id); refreshPlayEl(task.id); }
-    }
+  const allTasks = [...state.topTasks, ...state.rooms.flatMap(r => r.tasks)];
+  for (const task of allTasks) {
+    if (task.timerRunning && task.timerSeconds > 0) startTimer(task.id);
+    else { refreshTimerEl(task.id); refreshPlayEl(task.id); }
   }
 }
 
@@ -938,9 +1002,13 @@ function bindTask(li, task, rid) {
   });
   li.querySelector('[data-del-task]').addEventListener('click', () => {
     pauseTimer(task.id);
-    const room = state.rooms.find(r => r.id === rid);
-    if (room) { room.tasks = room.tasks.filter(t => t.id !== task.id); saveState(); }
-    li.remove(); refreshProgress(rid);
+    if (rid === 'top') {
+      state.topTasks = state.topTasks.filter(t => t.id !== task.id);
+    } else {
+      const room = state.rooms.find(r => r.id === rid);
+      if (room) room.tasks = room.tasks.filter(t => t.id !== task.id);
+    }
+    saveState(); li.remove(); refreshProgress(rid);
   });
   refreshTimerEl(task.id); refreshPlayEl(task.id);
 }
@@ -953,6 +1021,7 @@ function ripple(btn) {
 }
 
 function refreshProgress(rid) {
+  if (rid === 'top') { refreshTopProgress(); return; }
   const room = state.rooms.find(r => r.id === rid);
   if (!room) return;
   const done = room.tasks.filter(t => t.done).length, total = room.tasks.length;
@@ -963,6 +1032,36 @@ function refreshProgress(rid) {
   }
 }
 
+function refreshTopProgress() {
+  const el = document.getElementById('topTasksProgress');
+  if (!el) return;
+  const done = state.topTasks.filter(t => t.done).length, total = state.topTasks.length;
+  el.textContent = total > 0 ? `${done}/${total}` : '';
+  el.className = 'room-progress' + (total > 0 && done === total ? ' all-done' : '');
+}
+
+function bindAddTopTask() {
+  const input = document.getElementById('new-top-task');
+  const btn = document.getElementById('addTopTaskBtn');
+  if (!input || !btn) return;
+  const doAdd = () => {
+    const name = input.value.trim();
+    if (!name) return;
+    const task = makeTask({ name, minutes: 10 });
+    state.topTasks.push(task);
+    saveState();
+    input.value = '';
+    const tmp = document.createElement('div');
+    tmp.innerHTML = taskHTML(task);
+    const li = tmp.firstElementChild;
+    document.getElementById('topTasksList').appendChild(li);
+    bindTask(li, task, 'top');
+    refreshTopProgress();
+  };
+  btn.addEventListener('click', doAdd);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') doAdd(); });
+}
+
 // ============================================================
 // Header / bottom buttons
 // ============================================================
@@ -971,9 +1070,9 @@ function refreshProgress(rid) {
 document.getElementById('resetDayBtn').addEventListener('click', () => {
   if (!confirm('Mark all tasks as not done and reset all timers?')) return;
   stopAllTimers();
-  state.rooms.forEach(r => r.tasks.forEach(t => {
-    t.done = false; t.timerRunning = false; t.timerSeconds = t.minutes * 60;
-  }));
+  const resetTask = t => { t.done = false; t.timerRunning = false; t.timerSeconds = t.minutes * 60; };
+  state.topTasks.forEach(resetTask);
+  state.rooms.forEach(r => r.tasks.forEach(resetTask));
   saveState(); render();
 });
 
