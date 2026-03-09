@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#5C9474"/>
+  <!-- House shape -->
+  <path d="M256 110 L130 220 L155 220 L155 390 L357 390 L357 220 L382 220 Z" fill="white" opacity="0.95"/>
+  <!-- Door -->
+  <rect x="220" y="300" width="72" height="90" rx="6" fill="#5C9474"/>
+  <!-- Window -->
+  <rect x="175" y="255" width="52" height="42" rx="5" fill="#DFF0E8"/>
+  <rect x="289" y="255" width="52" height="42" rx="5" fill="#DFF0E8"/>
+  <!-- Broom / sparkle hint -->
+  <circle cx="370" cy="155" r="22" fill="white" opacity="0.3"/>
+  <circle cx="370" cy="155" r="12" fill="white" opacity="0.5"/>
+</svg>

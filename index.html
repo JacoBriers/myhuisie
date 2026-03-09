@@ -4,6 +4,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Huisie – Cleaning Tracker</title>
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#5C9474" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Huisie" />
+  <link rel="apple-touch-icon" href="icon.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
@@ -598,7 +604,7 @@ function uid() { return _uid++; }
 
 function makeTask(t) {
   const mins = t.minutes || 10;
-  return { id: uid(), name: t.name, minutes: mins, done: false, timerRunning: false, timerSeconds: mins * 60 };
+  return { id: uid(), name: t.name, minutes: mins, done: false, timerRunning: false, timerSeconds: mins * 60, timerStartedAt: null };
 }
 
 function setupToState(setup) {
@@ -633,10 +639,16 @@ function loadState() {
       if (!parsed.topTasks) parsed.topTasks = [];
       // Restore _uid above existing max id to avoid collisions
       let max = 0;
-      parsed.topTasks.forEach(t => { if (t.id > max) max = t.id; });
+      parsed.topTasks.forEach(t => {
+        if (t.id > max) max = t.id;
+        if (t.timerStartedAt === undefined) t.timerStartedAt = null;
+      });
       parsed.rooms.forEach(r => {
         if (r.id > max) max = r.id;
-        r.tasks.forEach(t => { if (t.id > max) max = t.id; });
+        r.tasks.forEach(t => {
+          if (t.id > max) max = t.id;
+          if (t.timerStartedAt === undefined) t.timerStartedAt = null;
+        });
       });
       _uid = max + 1;
       return parsed;
@@ -691,6 +703,22 @@ function playBeep() {
 // ============================================================
 const timers = {}; // taskId -> intervalId
 
+let _wakeLock = null;
+
+async function acquireWakeLock() {
+  if (!('wakeLock' in navigator)) return;
+  if (_wakeLock && !_wakeLock.released) return;
+  try {
+    _wakeLock = await navigator.wakeLock.request('screen');
+    _wakeLock.addEventListener('release', () => { _wakeLock = null; });
+  } catch (_) {}
+}
+
+function releaseWakeLockIfIdle() {
+  if (Object.keys(timers).length > 0) return;
+  if (_wakeLock && !_wakeLock.released) { _wakeLock.release().catch(() => {}); _wakeLock = null; }
+}
+
 function findTask(id) {
   const top = state.topTasks.find(t => t.id === id);
   if (top) return top;
@@ -699,16 +727,24 @@ function findTask(id) {
 }
 
 function fmt(seconds) {
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+  const s = Math.max(0, seconds);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-function refreshTimerEl(taskId) {
+function computeRemaining(task) {
+  if (!task.timerStartedAt) return task.timerSeconds;
+  const elapsed = Math.floor((Date.now() - task.timerStartedAt) / 1000);
+  return Math.max(0, task.timerSeconds - elapsed);
+}
+
+function refreshTimerEl(taskId, seconds) {
   const el = document.getElementById(`timer-${taskId}`);
   if (!el) return;
   const task = findTask(taskId);
   if (!task) return;
-  el.textContent = fmt(task.timerSeconds);
-  el.className = 'timer-display' + (timers[taskId] ? ' running' : task.timerSeconds === 0 ? ' expired' : '');
+  const secs = seconds !== undefined ? seconds : computeRemaining(task);
+  el.textContent = fmt(secs);
+  el.className = 'timer-display' + (timers[taskId] ? ' running' : secs === 0 ? ' expired' : '');
 }
 
 function refreshPlayEl(taskId) {
@@ -724,30 +760,41 @@ function startTimer(taskId) {
   if (timers[taskId]) return;
   const task = findTask(taskId);
   if (!task) return;
+  task.timerStartedAt = Date.now();
   task.timerRunning = true;
   saveState();
+  acquireWakeLock();
   timers[taskId] = setInterval(() => {
     const t = findTask(taskId);
     if (!t) { clearInterval(timers[taskId]); delete timers[taskId]; return; }
-    if (t.timerSeconds > 0) { t.timerSeconds--; saveState(); refreshTimerEl(taskId); }
-    if (t.timerSeconds === 0) {
+    const remaining = computeRemaining(t);
+    refreshTimerEl(taskId, remaining);
+    if (remaining === 0) {
       clearInterval(timers[taskId]); delete timers[taskId];
-      t.timerRunning = false; saveState();
-      playBeep(); refreshTimerEl(taskId); refreshPlayEl(taskId);
+      t.timerSeconds = 0; t.timerStartedAt = null; t.timerRunning = false;
+      saveState();
+      playBeep(); refreshTimerEl(taskId, 0); refreshPlayEl(taskId);
+      releaseWakeLockIfIdle();
     }
   }, 1000);
-  refreshTimerEl(taskId); refreshPlayEl(taskId);
+  refreshTimerEl(taskId, computeRemaining(task)); refreshPlayEl(taskId);
 }
 
 function pauseTimer(taskId) {
   if (timers[taskId]) { clearInterval(timers[taskId]); delete timers[taskId]; }
   const task = findTask(taskId);
-  if (task) { task.timerRunning = false; saveState(); }
+  if (task) {
+    task.timerSeconds = computeRemaining(task);
+    task.timerStartedAt = null;
+    task.timerRunning = false;
+    saveState();
+  }
   refreshTimerEl(taskId); refreshPlayEl(taskId);
+  releaseWakeLockIfIdle();
 }
 
 function stopAllTimers() {
-  Object.keys(timers).forEach(id => { clearInterval(timers[id]); delete timers[id]; });
+  Object.keys(timers).forEach(id => pauseTimer(+id));
 }
 
 // ============================================================
@@ -834,8 +881,29 @@ function render() {
 
   const allTasks = [...state.topTasks, ...state.rooms.flatMap(r => r.tasks)];
   for (const task of allTasks) {
-    if (task.timerRunning && task.timerSeconds > 0) startTimer(task.id);
-    else { refreshTimerEl(task.id); refreshPlayEl(task.id); }
+    if (task.timerRunning) {
+      if (task.timerStartedAt) {
+        // Timestamp-based: compute actual remaining
+        const remaining = computeRemaining(task);
+        if (remaining > 0) {
+          // Rebase so startTimer can start fresh from the correct remaining
+          task.timerSeconds = remaining;
+          task.timerStartedAt = null;
+          startTimer(task.id);
+        } else {
+          // Expired while away — reset silently
+          task.timerSeconds = 0; task.timerStartedAt = null; task.timerRunning = false;
+          saveState();
+          refreshTimerEl(task.id, 0); refreshPlayEl(task.id);
+        }
+      } else {
+        // Legacy save with no timerStartedAt — just start from timerSeconds
+        if (task.timerSeconds > 0) startTimer(task.id);
+        else { refreshTimerEl(task.id); refreshPlayEl(task.id); }
+      }
+    } else {
+      refreshTimerEl(task.id); refreshPlayEl(task.id);
+    }
   }
 }
 
@@ -1079,7 +1147,7 @@ function bindAddTopTask() {
 document.getElementById('resetDayBtn').addEventListener('click', () => {
   if (!confirm('Mark all tasks as not done and reset all timers?')) return;
   stopAllTimers();
-  const resetTask = t => { t.done = false; t.timerRunning = false; t.timerSeconds = t.minutes * 60; };
+  const resetTask = t => { t.done = false; t.timerRunning = false; t.timerSeconds = t.minutes * 60; t.timerStartedAt = null; };
   state.topTasks.forEach(resetTask);
   state.rooms.forEach(r => r.tasks.forEach(resetTask));
   saveState(); render();
@@ -1110,7 +1178,22 @@ document.getElementById('resetBtn').addEventListener('click', () => {
 // ============================================================
 // Init
 // ============================================================
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  if (Object.keys(timers).length > 0) acquireWakeLock();
+  // Refresh all running timer displays with corrected time
+  [...state.topTasks, ...state.rooms.flatMap(r => r.tasks)]
+    .filter(t => t.timerRunning)
+    .forEach(t => refreshTimerEl(t.id, computeRemaining(t)));
+});
+
 render();
+
+// Register service worker for PWA offline support
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
 </script>
 </body>
 </html>
