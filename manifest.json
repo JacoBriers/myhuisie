@@ -2,7 +2,7 @@
   "name": "Huisie – Cleaning Tracker",
   "short_name": "Huisie",
   "description": "A simple home cleaning tracker to keep your rooms tidy.",
-  "start_url": "/",
+  "start_url": "./",
   "display": "standalone",
   "background_color": "#FAF5EE",
   "theme_color": "#5C9474",
